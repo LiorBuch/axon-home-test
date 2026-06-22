@@ -48,7 +48,24 @@ def main():
     for p in processes:
         p.start()
 
-    while any(p.is_alive() for p in processes) and not shutdown_event.is_set():
+    # Supervisor loop: stop as soon as a process dies unexpectedly (non-zero or
+    # signal exit code), all processes finish cleanly, or a shutdown is requested.
+    while not shutdown_event.is_set():
+        crashed = [p for p in processes if not p.is_alive() and p.exitcode not in (0, None)]
+        if crashed:
+            for p in crashed:
+                log.error(
+                    "%s died unexpectedly (exitcode=%s). Tearing down pipeline.",
+                    p.name,
+                    p.exitcode,
+                )
+            shutdown_event.set()
+            break
+
+        if all(not p.is_alive() for p in processes):
+            log.info("All processes finished.")
+            break
+
         time.sleep(0.1)
 
     if shutdown_event.is_set():

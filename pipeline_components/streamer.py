@@ -29,31 +29,41 @@ class Streamer(Process):
 
         signal.signal(signal.SIGINT, local_sigint_handler)
 
-        cap = cv2.VideoCapture(self.video_path)
-        if not cap.isOpened():
-            log.error("Could not open video: %s", self.video_path)
-            self.out_queue.put(POISON_PILL)
-            return
-
-        # fall back to a sane default so the Viewer's timing math never divides by zero.
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if not fps or fps <= 0:
-            log.warning("Source reported invalid fps (%s); falling back to %s.", fps, DEFAULT_FPS)
-            fps = DEFAULT_FPS
-
-        while not self.shutdown_event.is_set():
-            ret, frame = cap.read()
-            if not ret:
-                log.info("Video file reached end of stream.")
-                break
-            try:
-                self.out_queue.put((frame, fps), timeout=0.1)
-            except queues.Full:
-                continue
-
-        cap.release()
+        cap = None
         try:
-            self.out_queue.put(POISON_PILL, timeout=0.5)
-        except queues.Full:
-            pass
-        log.info("Stream completed, poison pill sent.")
+            cap = cv2.VideoCapture(self.video_path)
+            if not cap.isOpened():
+                log.error("Could not open video: %s", self.video_path)
+                return
+
+            # fall back to a sane default so the Viewer's timing math never divides by zero.
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            if not fps or fps <= 0:
+                log.warning("Source reported invalid fps (%s); falling back to %s.", fps, DEFAULT_FPS)
+                fps = DEFAULT_FPS
+
+            while not self.shutdown_event.is_set():
+                ret, frame = cap.read()
+                if not ret:
+                    log.info("Video file reached end of stream.")
+                    break
+                try:
+                    self.out_queue.put((frame, fps), timeout=0.1)
+                except queues.Full:
+                    continue
+
+            log.info("Stream completed.")
+        except Exception:
+            # any crash here must tear the whole pipeline down, otherwise the
+            # downstream processes block forever waiting on this queue.
+            log.exception("Streamer crashed; signaling shutdown.")
+            self.shutdown_event.set()
+        finally:
+            if cap is not None:
+                cap.release()
+            # always emit the poison pill so the Detector can unblock and exit,
+            # whether we finished cleanly, were asked to shut down, or crashed.
+            try:
+                self.out_queue.put(POISON_PILL, timeout=0.5)
+            except queues.Full:
+                pass

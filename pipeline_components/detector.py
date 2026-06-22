@@ -32,49 +32,58 @@ class Detector(Process):
         counter = 0
         prev_frame = None
 
-        while not self.shutdown_event.is_set():
-            try:
-                data = self.in_queue.get(timeout=0.1)
-            except queues.Empty:
-                continue
-
-            # graceful shutdown hook.
-            if data == POISON_PILL:
+        try:
+            while not self.shutdown_event.is_set():
                 try:
-                    self.out_queue.put(POISON_PILL, timeout=0.5)
+                    data = self.in_queue.get(timeout=0.1)
+                except queues.Empty:
+                    continue
+
+                # graceful shutdown hook.
+                if data == POISON_PILL:
+                    break
+
+                frame, fps = data
+                detections = []  # bounding box tuples: (x, y, w, h).
+                gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+                if counter == 0:
+                    prev_frame = gray_frame
+                    counter += 1
+                else:
+                    diff = cv2.absdiff(gray_frame, prev_frame)
+                    thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)[1]
+                    thresh = cv2.dilate(thresh, None, iterations=2)
+                    cnts = cv2.findContours(
+                        thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                    )
+                    cnts = imutils.grab_contours(cnts)
+
+                    # extract coordinates from contours for bounding boxes.
+                    for c in cnts:
+                        # if cv2.contourArea(c) < 500: continue
+                        (x, y, w, h) = cv2.boundingRect(c)
+                        detections.append((x, y, w, h))
+
+                    prev_frame = gray_frame
+                    counter += 1
+
+                # send the unmodified frame, detections list, and fps to the viewer.
+                try:
+                    self.out_queue.put((frame, detections, fps), timeout=0.1)
                 except queues.Full:
-                    pass
-                break
+                    continue
 
-            frame, fps = data
-            detections = []  # bounding box tuples: (x, y, w, h).
-            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-            if counter == 0:
-                prev_frame = gray_frame
-                counter += 1
-            else:
-                diff = cv2.absdiff(gray_frame, prev_frame)
-                thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)[1]
-                thresh = cv2.dilate(thresh, None, iterations=2)
-                cnts = cv2.findContours(
-                    thresh.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                )
-                cnts = imutils.grab_contours(cnts)
-
-                # extract coordinates from contours for bounding boxes.
-                for c in cnts:
-                    # if cv2.contourArea(c) < 500: continue
-                    (x, y, w, h) = cv2.boundingRect(c)
-                    detections.append((x, y, w, h))
-
-                prev_frame = gray_frame
-                counter += 1
-
-            # send the unmodified frame, detections list, and fps to the viewer.
+            log.info("Exited cleanly.")
+        except Exception:
+            # any crash here must tear the whole pipeline down, otherwise the
+            # Viewer blocks forever waiting on this queue.
+            log.exception("Detector crashed; signaling shutdown.")
+            self.shutdown_event.set()
+        finally:
+            # always forward the poison pill so the Viewer can unblock and exit,
+            # whether we finished cleanly, were asked to shut down, or crashed.
             try:
-                self.out_queue.put((frame, detections, fps), timeout=0.1)
+                self.out_queue.put(POISON_PILL, timeout=0.5)
             except queues.Full:
-                continue
-
-        log.info("Exited cleanly.")
+                pass

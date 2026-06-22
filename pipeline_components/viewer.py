@@ -36,63 +36,73 @@ class Viewer(Process):
         # frame processing cost (blur/draw/render) does not accumulate into drift.
         next_frame_target = None
 
-        while not self.shutdown_event.is_set():
-            try:
-                data = self.in_queue.get(timeout=0.1)
-            except queues.Empty:
-                continue
-            if data == POISON_PILL:
-                break
+        try:
+            while not self.shutdown_event.is_set():
+                try:
+                    data = self.in_queue.get(timeout=0.1)
+                except queues.Empty:
+                    continue
+                if data == POISON_PILL:
+                    break
 
-            frame, detections, fps = data
-            if next_frame_target is None:
-                next_frame_target = time.perf_counter()
+                frame, detections, fps = data
+                if next_frame_target is None:
+                    next_frame_target = time.perf_counter()
 
-            # blurring stage (done before drawing so boxes stay crisp on top).
-            height, width, _ = frame.shape
+                # blurring stage (done before drawing so boxes stay crisp on top).
+                height, width, _ = frame.shape
 
-            for x, y, w, h in detections:
-                # defensive boundaries to prevent out of bounds NumPy indexing crashes.
-                x1, y1 = max(0, x), max(0, y)
-                x2, y2 = min(width, x + w), min(height, y + h)
+                for x, y, w, h in detections:
+                    # defensive boundaries to prevent out of bounds NumPy indexing crashes.
+                    x1, y1 = max(0, x), max(0, y)
+                    x2, y2 = min(width, x + w), min(height, y + h)
 
-                if x2 > x1 and y2 > y1:
-                    roi = frame[y1:y2, x1:x2]
+                    if x2 > x1 and y2 > y1:
+                        roi = frame[y1:y2, x1:x2]
 
-                    # we use cv2 blur for efficency.
-                    blurred_roi = cv2.blur(roi, (45, 45))
+                        # we use cv2 blur for efficency.
+                        blurred_roi = cv2.blur(roi, (45, 45))
 
-                    # paste the blurred block back into the frame.
-                    frame[y1:y2, x1:x2] = blurred_roi
+                        # paste the blurred block back into the frame.
+                        frame[y1:y2, x1:x2] = blurred_roi
 
-            # drawing bounding boxes on top of the blurred regions.
-            for x, y, w, h in detections:
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                # drawing bounding boxes on top of the blurred regions.
+                for x, y, w, h in detections:
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-            # render current Time.
-            current_time = time.strftime("%H:%M:%S", time.localtime())
-            cv2.putText(
-                frame,
-                current_time,
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 0, 255),
-                2,
-            )
+                # render current Time.
+                current_time = time.strftime("%H:%M:%S", time.localtime())
+                cv2.putText(
+                    frame,
+                    current_time,
+                    (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 0, 255),
+                    2,
+                )
 
-            cv2.imshow("Pipeline Output", frame)
+                cv2.imshow("Pipeline Output", frame)
 
-            # Pace to the source frame rate by sleeping only the time left until
-            # the next target, compensating for the time already spent processing.
-            next_frame_target += 1.0 / fps
-            wait_ms = max(1, int((next_frame_target - time.perf_counter()) * 1000))
-            if (cv2.waitKey(wait_ms) & 0xFF == ord("q")) or cv2.getWindowProperty(
-                "Pipeline Output", cv2.WND_PROP_VISIBLE
-            ) < 1:
-                log.info("User closed playback via window UI.")
-                self.shutdown_event.set()
-                break
+                # Pace to the source frame rate by sleeping only the time left until
+                # the next target, compensating for the time already spent processing.
+                next_frame_target += 1.0 / fps
+                wait_ms = max(1, int((next_frame_target - time.perf_counter()) * 1000))
+                if (cv2.waitKey(wait_ms) & 0xFF == ord("q")) or cv2.getWindowProperty(
+                    "Pipeline Output", cv2.WND_PROP_VISIBLE
+                ) < 1:
+                    log.info("User closed playback via window UI.")
+                    self.shutdown_event.set()
+                    break
 
-        cv2.destroyAllWindows()
-        log.info("Exited cleanly.")
+            log.info("Exited cleanly.")
+        except Exception:
+            # a crash here must signal the upstream processes to stop, otherwise
+            # they keep producing into a queue nobody drains.
+            log.exception("Viewer crashed; signaling shutdown.")
+            self.shutdown_event.set()
+        finally:
+            # always signal shutdown so upstream producers don't block forever on
+            # a full queue once playback has ended.
+            self.shutdown_event.set()
+            cv2.destroyAllWindows()
