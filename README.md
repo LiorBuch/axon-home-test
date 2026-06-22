@@ -76,6 +76,15 @@ The system is designed as a classic **Producer Consumer pipeline** split across 
 * **Why:** I used bounded queues (`maxsize=30`) between the processes. This acts as a thread/process safe FIFO mechanism. 
 * **Backpressure Management:** The bounding size ensures that if the Viewer or Detector experiences a temporary CPU spike, memory consumption does not balloon infinitely; instead, upstream processes naturally block until the pipeline clears.
 
+#### Trade off Considered: `Queue` vs. `Shared Memory`
+I deliberately chose `Queue` over a `multiprocessing.shared_memory` buffer pool. A shared memory design would avoid serializing each frame (a few MB) twice as it travels Streamer → Detector → Viewer, lowering CPU and latency. I decided against it here for the following reasons:
+
+* **Isolation & correctness:** With a `Queue`, each process receives its **own private copy** of the frame. This *physically guarantees* the "Detector must not draw on the image" constraint and makes the Viewer's in place blur completely safe. Shared memory shares the same physical buffer, reintroducing race conditions (torn frames if a buffer is recycled while still being read) that the `Queue` eliminates for free.
+* **Complexity:** Shared memory would turn a simple FIFO into a fixed size **buffer pool protocol** with a return/credit channel so the Streamer knows when a buffer is safe to reuse, plus explicit `close()`/`unlink()` cleanup on every shutdown path more code and more ways to leak OS level segments.
+* **No measured benefit for this scope:** The input is a single fixed file, and the pipeline already sustains the video's native FPS with smooth playback. The real bottleneck was the blur (addressed in section 3), not IPC throughput. The assignment also emphasizes correct architecture and smooth playback over raw throughput.
+
+For a higher resolution or higher throughput production system, shared memory (or zero copy frame handles) would be the natural next optimization.
+
 ### 2. Smooth Playback & Timing Optimization
 * To prevent stuttering or unnatural playback speeds, frame rate synchronization is managed entirely in the **Viewer** process using dynamic delays based on the source metadata:
   $$\text{delay\_ms} = \max\left(1, \text{int}\left(\frac{1000}{\text{video\_fps}}\right)\right)$$
