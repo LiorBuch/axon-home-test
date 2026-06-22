@@ -86,11 +86,16 @@ I deliberately chose `Queue` over a `multiprocessing.shared_memory` buffer pool.
 For a higher resolution or higher throughput production system, shared memory (or zero copy frame handles) would be the natural next optimization.
 
 ### 2. Smooth Playback & Timing Optimization
-* To prevent stuttering or unnatural playback speeds, frame rate synchronization is managed entirely in the **Viewer** process using dynamic delays based on the source metadata:
+* To prevent stuttering or unnatural playback speeds, frame rate synchronization is managed entirely in the **Viewer** process based on the source metadata.
+* **Drift compensation:** A naive fixed `wait = 1000 / fps` per frame plays back too slowly, because the per frame processing cost (blur, drawing, rendering) is *added on top of* the wait. Instead, the Viewer keeps an absolute playback clock and only sleeps for the time remaining until the next frame's target, subtracting the work already done:
 
 ```python
-delay_ms = max(1, int(1000 / video_fps))
+next_frame_target += 1.0 / fps
+wait_ms = max(1, int((next_frame_target - time.perf_counter()) * 1000))
+cv2.waitKey(wait_ms)
 ```
+
+* Because the target advances by an exact frame period each iteration (rather than resetting), small per frame timing errors do not accumulate, keeping playback locked to the source frame rate.
 
 ### 3. Stage B Optimization: `cv2.blur` (Normalized Box Filter)
 * **The Problem:** At the beggining i used Gaussian Blurring but Heavy Gaussian Blurring on large motion contours originally introduced a massive computational bottleneck, degrading playback FPS.
