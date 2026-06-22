@@ -87,7 +87,10 @@ For a higher resolution or higher throughput production system, shared memory (o
 
 ### 2. Smooth Playback & Timing Optimization
 * To prevent stuttering or unnatural playback speeds, frame rate synchronization is managed entirely in the **Viewer** process using dynamic delays based on the source metadata:
-  $$\text{delay\_ms} = \max\left(1, \text{int}\left(\frac{1000}{\text{video\_fps}}\right)\right)$$
+
+```python
+delay_ms = max(1, int(1000 / video_fps))
+```
 
 ### 3. Stage B Optimization: `cv2.blur` (Normalized Box Filter)
 * **The Problem:** At the beggining i used Gaussian Blurring but Heavy Gaussian Blurring on large motion contours originally introduced a massive computational bottleneck, degrading playback FPS.
