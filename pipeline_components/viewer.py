@@ -1,10 +1,15 @@
+import logging
 import signal
 import sys
 import cv2
 from multiprocessing import Event, Process, Queue, queues
 import time
 
+from pipeline_components.logging_config import configure_logging
+
 POISON_PILL = "EOF"
+
+log = logging.getLogger(__name__)
 
 
 class Viewer(Process):
@@ -14,9 +19,10 @@ class Viewer(Process):
         self.shutdown_event = shutdown_event
 
     def run(self):
+        configure_logging()
 
         def local_sigint_handler(signum, frame):
-            print("[Viewer] SIGINT intercepted, destroying UI Windows.")
+            log.info("SIGINT intercepted, destroying UI windows.")
             cv2.destroyAllWindows()
             self.shutdown_event.set()
             sys.exit(0)
@@ -73,9 +79,9 @@ class Viewer(Process):
             if (cv2.waitKey(delay_ms) & 0xFF == ord("q")) or cv2.getWindowProperty(
                 "Pipeline Output", cv2.WND_PROP_VISIBLE
             ) < 1:
-                print(f"[{self.name}] User closed playback via window UI.")
+                log.info("User closed playback via window UI.")
                 self.shutdown_event.set()
                 break
 
         cv2.destroyAllWindows()
-        print("[Viewer] Exited cleanly.")
+        log.info("Exited cleanly.")

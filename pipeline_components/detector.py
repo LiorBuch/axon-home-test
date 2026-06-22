@@ -1,10 +1,15 @@
 from multiprocessing import Event, Process, Queue, queues
+import logging
 import signal
 import sys
 import imutils
 import cv2
 
+from pipeline_components.logging_config import configure_logging
+
 POISON_PILL = "EOF"
+
+log = logging.getLogger(__name__)
 
 
 class Detector(Process):
@@ -15,9 +20,10 @@ class Detector(Process):
         self.shutdown_event = shutdown_event
 
     def run(self):
+        configure_logging()
 
         def local_sigint_handler(signum, frame):
-            print("[Detector] SIGINT intercepted. Cleaning up Detector.")
+            log.info("SIGINT intercepted. Cleaning up Detector.")
             self.shutdown_event.set()
             sys.exit(0)
 
@@ -58,7 +64,6 @@ class Detector(Process):
 
                 # extract coordinates from contours for bounding boxes.
                 for c in cnts:
-                    # Optional optimization: filter out tiny noise contours if desired.
                     # if cv2.contourArea(c) < 500: continue
                     (x, y, w, h) = cv2.boundingRect(c)
                     detections.append((x, y, w, h))
@@ -72,4 +77,4 @@ class Detector(Process):
             except queues.Full:
                 continue
 
-        print("[Detector] Exited cleanly.")
+        log.info("Exited cleanly.")
