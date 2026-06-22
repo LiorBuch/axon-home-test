@@ -1,10 +1,25 @@
 import time
+import argparse
 from pipeline_components import Streamer, Detector, Viewer
 from multiprocessing import Queue, Event
 import signal
 
+DEFAULT_VIDEO_PATH = "People - 6387.mp4"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run the multi-process video processing pipeline.")
+    parser.add_argument(
+        "video_path",
+        nargs="?",
+        default=DEFAULT_VIDEO_PATH,
+        help=f"Path to the input video file. Defaults to '{DEFAULT_VIDEO_PATH}'.",
+    )
+    return parser.parse_args()
+
 
 def main():
+    args = parse_args()
     streamer_to_detector = Queue(maxsize=30)
     detector_to_viewer = Queue(maxsize=30)
     
@@ -18,7 +33,7 @@ def main():
     
     # pipeline
     processes = [
-        Streamer("People - 6387.mp4", streamer_to_detector,shutdown_event),
+        Streamer(args.video_path, streamer_to_detector,shutdown_event),
         Detector(streamer_to_detector, detector_to_viewer,shutdown_event),
         Viewer(detector_to_viewer,shutdown_event)
     ]
